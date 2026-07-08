@@ -31,6 +31,16 @@ type RoomMemberRow = {
   joined_at: string;
 };
 
+/** join_room(...) 関数の返り行。not_found / full のときはメンバー列が null。 */
+type JoinRoomFnRow = {
+  status: "joined" | "already_member" | "full" | "not_found";
+  member_id: string | null;
+  nickname: string | null;
+  x_account: string | null;
+  device_id: string | null;
+  joined_at: string | null;
+};
+
 function toRoomRecord(row: RoomRow): RoomRecord {
   return {
     id: row.id,
@@ -128,57 +138,32 @@ export class SupabaseRoomRepository implements RoomRepository {
   }
 
   async join(input: JoinRoomInput): Promise<JoinRoomResult> {
-    const { data: roomData, error: roomError } = await this.client
-      .from("rooms")
-      .select("*")
-      .eq("id", input.roomId)
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle<RoomRow>();
-    if (roomError) throw roomError;
-    if (!roomData) return { status: "not_found" };
-
-    // 既に参加済み（同一 device_id）なら冪等に成功扱い。
-    const { data: existing, error: existingError } = await this.client
-      .from("room_members")
-      .select("*")
-      .eq("room_id", input.roomId)
-      .eq("device_id", input.deviceId)
-      .maybeSingle<RoomMemberRow>();
-    if (existingError) throw existingError;
-    if (existing) return { status: "already_member", member: toMemberRecord(existing) };
-
-    // 定員チェック（M1 は素朴な check-then-insert。厳密な競合制御は M2 / R3）。
-    const counts = await this.countMembers([input.roomId]);
-    if ((counts.get(input.roomId) ?? 0) >= roomData.capacity) {
-      return { status: "full" };
-    }
-
-    const { data: inserted, error: insertError } = await this.client
-      .from("room_members")
-      .insert({
-        room_id: input.roomId,
-        nickname: input.nickname,
-        x_account: input.xAccount,
-        device_id: input.deviceId,
+    // 定員超過を DB レベルで防ぐため、check-then-insert ではなく join_room 関数を使う（M2 / R3）。
+    // 同一イベントのアドバイザリロック下で「人数 < 定員」を確認してから insert するので、
+    // 複数端末が同時に参加しても定員を超えない。
+    const { data, error } = await this.client
+      .rpc("join_room", {
+        p_room_id: input.roomId,
+        p_nickname: input.nickname,
+        p_x_account: input.xAccount,
+        p_device_id: input.deviceId,
       })
-      .select("*")
-      .single<RoomMemberRow>();
+      .single<JoinRoomFnRow>();
+    if (error) throw error;
 
-    if (insertError) {
-      // unique(room_id, device_id) 競合＝ほぼ同時の二重参加。既参加として扱う。
-      if (insertError.code === "23505") {
-        const { data: raced } = await this.client
-          .from("room_members")
-          .select("*")
-          .eq("room_id", input.roomId)
-          .eq("device_id", input.deviceId)
-          .maybeSingle<RoomMemberRow>();
-        if (raced) return { status: "already_member", member: toMemberRecord(raced) };
-      }
-      throw insertError;
-    }
+    if (data.status === "not_found") return { status: "not_found" };
+    if (data.status === "full") return { status: "full" };
 
-    return { status: "joined", member: toMemberRecord(inserted) };
+    const member: RoomMemberRecord = {
+      id: data.member_id as string,
+      roomId: input.roomId,
+      nickname: data.nickname as string,
+      xAccount: data.x_account,
+      deviceId: data.device_id as string,
+      joinedAt: data.joined_at as string,
+    };
+    if (data.status === "already_member") return { status: "already_member", member };
+    return { status: "joined", member };
   }
 
   async getWithMemberCount(roomId: string): Promise<RoomWithMemberCount | null> {

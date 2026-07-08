@@ -10,9 +10,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 現在の状態
 
-M1（入室〜ルーム一覧の縦切り）完了。URL でイベントに入室し、ニックネームを入れ、ルームを作成 or 既存ルームに
-入室でき、ルーム一覧に参加人数が表示される。リロードしてもニックネーム（端末 localStorage 保存）が保持される。
-M2 以降（ロビー自動マッチ・チャット等）は未着手。
+M2（ロビー自動マッチ）まで完了。M1 に加えて、SC-004 の「おまかせで待つ」からロビー（SC-006）に入ると、
+待機 60 秒経過後に自動でルームへ割り当てられ、マッチ成立オーバーレイ（OV-01・音／バイブ付き）を経て
+ルーム画面へ到達する。優先順は「①空きのある既存ルーム → ②なければ待機者同士で新ルーム（既定定員 3）」で、
+1 人だけ残った場合は待機継続。複数端末が同時にマッチング／参加しても二重割当・定員超過は起きない。
+M3 以降（ルームチャット・話題カード・TTL 物理削除等）は未着手。
+
+M2 で追加したもの:
+
+- マイグレーション `supabase/migrations/20260708000002_m2_lobby_matching.sql`
+  - `lobby_entries`（`event_id` / `nickname` / `x_account` / `device_id` / `entered_at` / `matched_room_id` ほか、
+    `unique(event_id, device_id)` で同一端末の二重待機を禁止）。RLS 有効・ポリシー無し・service_role にのみ GRANT。
+  - DB 関数 `apply_match_plan(event_id, assignments, new_rooms, default_capacity)`: 判定結果（プラン）を
+    `pg_advisory_xact_lock`（イベント単位）下で原子的に適用する。`matched_room_id IS NULL` のときだけ確保する
+    条件付き UPDATE と、insert 前のロック下人数再確認で、二重割当・定員超過・空ルーム量産を防ぐ（R3）。
+  - DB 関数 `join_room(...)`: M1 の素朴な check-then-insert を置き換え、同じイベントロック下で「人数 < 定員」を
+    確認してから insert する。同時 join でも定員を超えない（R3）。
+- ドメイン層（Supabase 非依存の純粋関数）: `decideMatch(waiting, openRooms, rule, now): MatchResult`
+  （`src/lib/domain/services/matching.ts`）。しきい値超過の待機者を、①既存ルームの空きへ割当→②残りを既定定員で
+  グループ化して新ルーム、と判定する。1 人余りは待機継続。
+- 調整値の集約: `src/lib/matching-config.ts`（`MATCH_WAIT_THRESHOLD_MS=60s` / `LOBBY_TICK_INTERVAL_MS=5s` /
+  `DEFAULT_ROOM_CAPACITY=3` / `MATCH_WAIT_TARGET_MAX_MS=90s`）。しきい値・tick 間隔・定員はここだけを直す。
+- ドメイン層インターフェース `LobbyRepository` とアダプター `SupabaseLobbyRepository`
+  （enqueue / dequeue / getEntry / listWaiting / countWaiting / applyMatchPlan）。待機状態の取得・購読は
+  この層に隔離する（R1・R2 と整合）。
+- Server Actions（`src/app/actions.ts`）: `enterLobby` / `leaveLobby` / `lobbyTick`。
+  `lobbyTick` はクライアント主導トリガー（R4）で、呼ばれるたびに decideMatch を実行して適用し、
+  併せて自分の状態（待機人数・マッチ成立）を返すポーリング窓口（R1）を兼ねる。
+- 画面 SC-006 ロビー待機（`src/app/e/[slug]/lobby/page.tsx`）: 5 秒間隔の tick、待機人数・経過時間表示、
+  「待機をやめる」「自分でルームを選ぶ」、単独待機時の受け皿ルーム作成導線、通信断時の「再接続中…」表示。
+  OV-01 マッチ成立オーバーレイ（`src/components/match-overlay.tsx`、視覚主・Web Audio の効果音／`navigator.vibrate` 従、
+  タップで SC-007 へ）。SC-004 の「おまかせで待つ」を実ロビーに接続。
+
+### M2 の設計判断（R1 / R3 / R4）
+
+- **R4 マッチング実行トリガー = クライアント主導 tick**。ロビー画面が 5 秒おきに Server Action `lobbyTick` を呼び、
+  サーバー側で decideMatch を実行・適用する。Vercel Cron / pg_cron 不要でローカル完結（`supabase start` + `npm run dev`
+  だけで動く）ため採用。代替の pg_cron はローカルでの常時実行の担保が要り、Vercel Cron はクラウド前提で
+  「ローカル完結」に反するため見送り。判定は純粋関数のままなので、将来トリガーだけ差し替え可能（R4 の要件）。
+- **R3 競合制御 = イベント単位のアドバイザリロック + 条件付き UPDATE + insert 前人数再確認**。
+  supabase-js（PostgREST）は複数呼び出しをまたぐトランザクションを張れないため、原子性が要る適用は DB 関数に閉じ込め、
+  `pg_advisory_xact_lock` で同一イベントの適用（マッチ適用・join）を直列化。`matched_room_id IS NULL` のときだけ
+  確保する UPDATE で「1 エントリ 1 回だけマッチ」を保証し、insert 前にロック下で人数を数えて定員超過を防ぐ。
+  10 端末同時 tick / 10 端末同時 join でも二重割当・定員超過・取り残しが出ないことを実測で確認済み。
+- **R1 リアルタイム更新 = ポーリング**。ブラウザから Supabase を直接購読すると「anon 直接アクセス拒否」（R2）と
+  矛盾するため、tick が待機人数・自分の状態を併せて返すポーリング方式を採用（プロトタイプには十分・実装が単純）。
+  取得ロジックは `LobbyRepository` に隔離してあり、将来 Supabase Realtime Broadcast（サーバー送信・ブラウザは購読のみ）に
+  差し替える余地を残す。
 
 M1 で追加したもの:
 

@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 
 import { getRoomDetail, type RoomDetailResult } from "@/app/actions";
 import { ExpiredNotice } from "@/components/expired-notice";
-import { formatRemaining, Hint, PageTitle, Screen, TextLink } from "@/components/ui";
+import { RemainingCountdown } from "@/components/remaining-countdown";
+import { Hint, PageTitle, Screen, TextLink } from "@/components/ui";
 
 // SC-007 ルームチャットのプレースホルダ（本実装は M3）。
 // M1 ではルーム名・参加人数・メンバー一覧の表示のみ。
@@ -36,7 +37,8 @@ export default function RoomDetailPage() {
         <div className="min-w-0">
           <PageTitle>{room.name}</PageTitle>
           <Hint>
-            {room.memberCount}/{room.capacity} 人 ・ {formatRemaining(room.expiresAt)}
+            {room.memberCount}/{room.capacity} 人 ・{" "}
+            <RemainingCountdown expiresAt={room.expiresAt} />
           </Hint>
         </div>
         <TextLink href={`/e/${slug}`}>ルーム一覧へ</TextLink>

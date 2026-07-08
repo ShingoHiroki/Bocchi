@@ -7,14 +7,17 @@
  */
 
 import { createEventRepository } from "@/lib/adapters/supabase/event-repository";
+import { createLobbyRepository } from "@/lib/adapters/supabase/lobby-repository";
 import { createRoomRepository } from "@/lib/adapters/supabase/room-repository";
 import type { SimilarEvent } from "@/lib/domain/interfaces/event-repository";
+import { decideMatch } from "@/lib/domain/services/matching";
 import { normalizeHashtag } from "@/lib/domain/services/normalize-hashtag";
 import {
   validateCapacity,
   validateHashtag,
   validateRoomName,
 } from "@/lib/domain/services/validation";
+import { DEFAULT_ROOM_CAPACITY, MATCH_WAIT_THRESHOLD_MS } from "@/lib/matching-config";
 
 function isActive(expiresAt: string): boolean {
   return new Date(expiresAt).getTime() > Date.now();
@@ -226,4 +229,150 @@ export async function getRoomDetail(roomId: string): Promise<RoomDetailResult> {
     },
     members: members.map((m) => ({ nickname: m.nickname, xAccount: m.xAccount })),
   };
+}
+
+// ── SC-006: ロビー待機登録（「ロビーで待つ」） ──────────────────────────────
+export type EnterLobbyResult =
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "ok"; enteredAt: string };
+
+export async function enterLobby(input: {
+  slug: string;
+  nickname: string;
+  xAccount: string;
+  deviceId: string;
+}): Promise<EnterLobbyResult> {
+  const events = createEventRepository();
+  const event = await events.findBySlug(input.slug);
+  if (!event) return { status: "not_found" };
+  if (!isActive(event.expiresAt)) return { status: "expired" };
+
+  const lobby = createLobbyRepository();
+  const entry = await lobby.enqueue({
+    eventId: event.id,
+    nickname: input.nickname,
+    xAccount: input.xAccount.trim() === "" ? null : input.xAccount.trim(),
+    deviceId: input.deviceId,
+  });
+  return { status: "ok", enteredAt: entry.enteredAt };
+}
+
+// ── SC-006: ロビー待機の解除（「待機をやめる」「自分でルームを選ぶ」） ──────────
+export async function leaveLobby(input: { slug: string; deviceId: string }): Promise<void> {
+  const events = createEventRepository();
+  const event = await events.findBySlug(input.slug);
+  if (!event) return;
+  const lobby = createLobbyRepository();
+  await lobby.dequeue(event.id, input.deviceId);
+}
+
+// ── SC-004: イベントホームでの「この端末のロビー状態」照会 ─────────────────────
+//
+// lobbyTick と異なり、ここでは decideMatch / applyMatchPlan を呼ばない（照会専用）。
+// マッチング判定の実行はロビー画面の tick（R4）の責務のまま維持する。
+// waitingCount はこの端末の待機・マッチ状態によらず、ロビーの現在の待機人数を
+// 常時表示するために全ステータスへ含める。
+export type LobbyStatusResult =
+  | { status: "none"; waitingCount: number }
+  | { status: "waiting"; waitingCount: number }
+  | { status: "matched"; roomId: string; roomName: string; waitingCount: number };
+
+export async function getLobbyStatus(slug: string, deviceId: string): Promise<LobbyStatusResult> {
+  const events = createEventRepository();
+  const event = await events.findBySlug(slug);
+  if (!event || !isActive(event.expiresAt)) return { status: "none", waitingCount: 0 };
+
+  const lobby = createLobbyRepository();
+  const [entry, waitingCount] = await Promise.all([
+    lobby.getEntry(event.id, deviceId),
+    lobby.countWaiting(event.id),
+  ]);
+  if (!entry) return { status: "none", waitingCount };
+
+  if (entry.matchedRoomId) {
+    const rooms = createRoomRepository();
+    const room = await rooms.getWithMemberCount(entry.matchedRoomId);
+    if (room) return { status: "matched", roomId: room.id, roomName: room.name, waitingCount };
+    // 割当先ルームが消えていた場合は表示なし扱い（ロビー画面の tick が次サイクルで整合を取る）。
+    return { status: "none", waitingCount };
+  }
+
+  return { status: "waiting", waitingCount };
+}
+
+// ── SC-006: ロビー tick（マッチング実行＋自分の状態取得） ─────────────────────
+//
+// R4（トリガー）: Vercel Cron / pg_cron を使わず「クライアント主導」を採る。
+// ロビー画面が数秒おきにこの Server Action を呼び、呼ばれるたびにサーバー側で
+// マッチング判定（decideMatch）を走らせて適用する。二重実行・二重割当は
+// DB のイベントロック（apply_match_plan / join_room）で吸収する（R3）。
+//
+// R1（リアルタイム更新）: ブラウザから Supabase を直接購読せず（R2 と矛盾するため）、
+// この tick が「待機人数・自分の状態」も併せて返すポーリング方式にする。取得は
+// LobbyRepository（アダプター層）越しに隔離している。
+export type LobbyTickResult =
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "not_waiting" }
+  | { status: "waiting"; waitingCount: number; enteredAt: string }
+  | {
+      status: "matched";
+      roomId: string;
+      roomName: string;
+      memberCount: number;
+      capacity: number;
+    };
+
+export async function lobbyTick(input: {
+  slug: string;
+  deviceId: string;
+}): Promise<LobbyTickResult> {
+  const events = createEventRepository();
+  const event = await events.findBySlug(input.slug);
+  if (!event) return { status: "not_found" };
+  if (!isActive(event.expiresAt)) return { status: "expired" };
+
+  const lobby = createLobbyRepository();
+  const rooms = createRoomRepository();
+
+  // 1) マッチング実行: 待機者と空きルームを読み、純粋関数で判定し、DB へ原子的に適用する。
+  const [waiting, openRooms] = await Promise.all([
+    lobby.listWaiting(event.id),
+    rooms.list(event.id),
+  ]);
+  const plan = decideMatch(
+    waiting.map((e) => ({
+      id: e.id,
+      deviceId: e.deviceId,
+      nickname: e.nickname,
+      xAccount: e.xAccount,
+      enteredAt: e.enteredAt,
+    })),
+    openRooms.map((r) => ({ id: r.id, capacity: r.capacity, memberCount: r.memberCount })),
+    { waitThresholdMs: MATCH_WAIT_THRESHOLD_MS, defaultCapacity: DEFAULT_ROOM_CAPACITY },
+    Date.now(),
+  );
+  await lobby.applyMatchPlan(event.id, plan);
+
+  // 2) 自分の状態を返す。
+  const entry = await lobby.getEntry(event.id, input.deviceId);
+  if (!entry) return { status: "not_waiting" };
+
+  if (entry.matchedRoomId) {
+    const room = await rooms.getWithMemberCount(entry.matchedRoomId);
+    if (room) {
+      return {
+        status: "matched",
+        roomId: room.id,
+        roomName: room.name,
+        memberCount: room.memberCount,
+        capacity: room.capacity,
+      };
+    }
+    // 割当先ルームが消えていた場合は待機扱いに戻す（次サイクルで再判定）。
+  }
+
+  const waitingCount = await lobby.countWaiting(event.id);
+  return { status: "waiting", waitingCount, enteredAt: entry.enteredAt };
 }

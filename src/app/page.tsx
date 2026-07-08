@@ -8,11 +8,11 @@ import {
   resolveEventByName,
   type ResolveEventResult,
 } from "@/app/actions";
+import { RemainingCountdown } from "@/components/remaining-countdown";
 import {
   Button,
   ErrorText,
   FieldLabel,
-  formatRemaining,
   Hint,
   PageTitle,
   Screen,
@@ -112,7 +112,7 @@ export default function HomePage() {
                       #{s.displayName}
                     </span>
                     <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                      {s.memberCount}人参加 / {formatRemaining(s.expiresAt)}
+                      {s.memberCount}人参加 / <RemainingCountdown expiresAt={s.expiresAt} />
                     </span>
                   </button>
                 </li>
@@ -163,15 +163,26 @@ export default function HomePage() {
       <div className="mt-8">
         <FieldLabel>イベントに入る</FieldLabel>
         <div className="flex gap-2">
-          <TextField
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="#イベント名を入力"
-            maxLength={50}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !pending) handleResolve();
-            }}
-          />
+          <div className="flex flex-1 items-center rounded-lg border border-zinc-300 bg-white pl-3 focus-within:border-indigo-500 dark:border-zinc-700 dark:bg-zinc-900">
+            <span
+              className="shrink-0 select-none text-base text-zinc-400 dark:text-zinc-500"
+              aria-hidden="true"
+            >
+              #
+            </span>
+            <TextField
+              unstyled
+              aria-label="イベント名"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="イベント名を入力"
+              maxLength={50}
+              className="py-2 pr-3 pl-1"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !pending) handleResolve();
+              }}
+            />
+          </div>
           <button
             type="button"
             onClick={handleResolve}

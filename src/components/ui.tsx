@@ -30,12 +30,28 @@ export function FieldLabel({ children }: { children: ReactNode }) {
   );
 }
 
-export function TextField(props: InputHTMLAttributes<HTMLInputElement>) {
+type TextFieldProps = InputHTMLAttributes<HTMLInputElement> & {
+  /** true の場合、枠線・背景などの外枠スタイルを持たない裸の input を返す。
+   *  「#」プレフィックスのような自前の外枠と組み合わせる場合に使う。 */
+  unstyled?: boolean;
+};
+
+export function TextField({ unstyled, className, ...props }: TextFieldProps) {
+  if (unstyled) {
+    return (
+      <input
+        {...props}
+        className={`w-full bg-transparent text-base text-zinc-900 outline-none dark:text-zinc-100 ${
+          className ?? ""
+        }`}
+      />
+    );
+  }
   return (
     <input
       {...props}
       className={`w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-base text-zinc-900 outline-none focus:border-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 ${
-        props.className ?? ""
+        className ?? ""
       }`}
     />
   );
@@ -66,13 +82,4 @@ export function TextLink({ href, children }: { href: string; children: ReactNode
       {children}
     </Link>
   );
-}
-
-/** 残り有効時間を「残り◯時間」「残り◯分」の文言にする。 */
-export function formatRemaining(expiresAt: string): string {
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return "終了";
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 60) return `残り${minutes}分`;
-  return `残り${Math.floor(minutes / 60)}時間`;
 }

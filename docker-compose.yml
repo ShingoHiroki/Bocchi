@@ -1,0 +1,27 @@
+# Next.js アプリをコンテナで動かすための compose（動作確認・配布用）。
+#
+# 前提:
+# - ローカル Supabase は Supabase CLI が管理する（`supabase start` で起動しておくこと）。
+#   ここには含めない（`supabase/config.toml` が compose 相当の設定ファイル）
+# - `.env.local` が存在すること（anon key を env_file として読み込む）
+# - 普段の開発はホストの `npm run dev` を使い、こちらはコンテナでの動作確認用
+#
+# 使い方:
+#   supabase start
+#   docker compose up --build
+#   → http://localhost:3000
+
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    environment:
+      # コンテナ内から 127.0.0.1 ではホストに届かないため、
+      # ホスト上のローカル Supabase には host.docker.internal 経由で接続する
+      NEXT_PUBLIC_SUPABASE_URL: http://host.docker.internal:54321
+    extra_hosts:
+      # Linux でも host.docker.internal を解決できるようにする（macOS/Windows では無害）
+      - "host.docker.internal:host-gateway"

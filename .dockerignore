@@ -1,0 +1,19 @@
+# ビルドコンテキストから除外するもの
+node_modules
+.next
+.git
+.gitignore
+
+# 秘密情報はイメージに焼き込まない（実行時に env_file / environment で渡す）
+.env*
+!.env.local.example
+
+# アプリのビルドに不要なもの
+supabase
+docs
+.claude
+README.md
+CLAUDE.md
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -10,11 +10,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 現在の状態
 
-M2（ロビー自動マッチ）まで完了。M1 に加えて、SC-004 の「おまかせで待つ」からロビー（SC-006）に入ると、
-待機 60 秒経過後に自動でルームへ割り当てられ、マッチ成立オーバーレイ（OV-01・音／バイブ付き）を経て
-ルーム画面へ到達する。優先順は「①空きのある既存ルーム → ②なければ待機者同士で新ルーム（既定定員 3）」で、
-1 人だけ残った場合は待機継続。複数端末が同時にマッチング／参加しても二重割当・定員超過は起きない。
-M3 以降（ルームチャット・話題カード・TTL 物理削除等）は未着手。
+M3（ルームチャット）まで完了。M2 までに加えて、マッチ成立・ルーム作成・ルーム参加のいずれの経路でも、
+集合場所の相談を促すシステム初期メッセージ（D4）がルームに自動投稿される（1 ルーム 1 件・重複なし）。
+SC-007 ルームチャット画面を本実装し、システム／参加者メッセージの区別・自分の発言の右寄せ・クイック返信チップ
+（1 タップ送信）・自由入力送信・メンバー表示（ニックネーム＋任意 X リンク）・退室（OV-02 確認 → room_members
+から除去 → ルーム一覧）を備える。複数端末間の同期は Server Action のポーリング（3 秒間隔）で行う。
+話題カードは M4 のため「準備中」ボタンのみ。M4 以降（話題カード本実装・TTL 物理削除・磨き込み）は未着手。
+
+M3 で追加したもの:
+
+- マイグレーション `supabase/migrations/20260708000003_m3_messages.sql`
+  - `messages`（`room_id` / `sender_type`(system|user) / `system_kind` / `sender_device_id`（本人の右寄せ判定用・
+    system は NULL）/ `sender_nickname` / `body`(<=500) / `created_at`）。RLS 有効・ポリシー無し・service_role にのみ GRANT。
+  - 重複防止の要: 部分ユニークインデックス `messages_one_system_kind_per_room (room_id, system_kind) where system_kind is not null`。
+  - DB 関数 `ensure_system_message(room_id, kind, nickname, body)`: `ON CONFLICT DO NOTHING` で冪等投稿。
+    ルーム作成・参加・マッチ成立の複数経路から何度呼ばれても 1 ルーム 1 件に収束する（並行呼び出しでも安全）。
+- ドメイン層: インターフェース `ChatRepository`（`listMessages` / `postMessage` / `ensureSystemMessage`）、
+  文言の集約 `src/lib/domain/services/chat-content.ts`（システム初期メッセージ本文・クイック返信候補・種別 `welcome`。
+  UI 文言を DB に埋め込まず TS 側に置く＝ D8 の移植性方針）、`validateMessageBody`（空送信不可・500 文字以内・空白のみ不可）。
+- アダプター層: `SupabaseChatRepository`（`src/lib/adapters/supabase/chat-repository.ts`）。`ensureSystemMessage` は
+  `ensure_system_message` RPC を呼ぶ。`RoomRepository.leave(roomId, deviceId)` を追加（退室 = room_members から除去）。
+- 設定値: `ROOM_MESSAGES_POLL_INTERVAL_MS=3s`（`src/lib/matching-config.ts`。チャット同期のポーリング間隔）。
+- Server Actions（`src/app/actions.ts`）: `getRoomChat`（初回ロード。welcome を保証しつつルーム・メンバー・メッセージを返す）/
+  `pollRoomMessages`（同期用の軽量取得）/ `postRoomMessage`（バリデーション付き投稿）/ `leaveRoom`。
+  併せて `createRoom` / `joinRoom` / `lobbyTick`（matched 分岐）にシステム自動投稿を組み込んだ。
+- 画面 SC-007 ルームチャット（`src/app/e/[slug]/rooms/[roomId]/page.tsx`、プレースホルダを置き換え）:
+  メッセージリスト（system は中央・参加者は左／自分は右寄せ・楽観表示と失敗時の再送）、クイック返信チップ、
+  入力欄＋送信、メンバー表示、OV-02 退室確認、接続断バー、満員／未参加時の導線、話題カードは「準備中」。
+
+### M3 の設計判断（システム自動投稿の重複防止）
+
+- **重複防止 = DB の部分ユニークインデックス + `ON CONFLICT DO NOTHING`（`ensure_system_message`）**。
+  システム初期メッセージ（D4）は「マッチ成立・ルーム作成・ルーム参加・チャット初回ロード」の複数経路から
+  投げられうるため、アプリ側の「投稿前 SELECT で有無確認」では並行実行時に競合して二重投稿になりうる。
+  そこで `(room_id, system_kind)` の部分ユニークインデックスを唯一の真実とし、DB 関数で冪等 INSERT する。
+  どの経路から何回呼ばれても 1 ルームにつき `welcome` は必ず 1 件。文言は TS（chat-content.ts）に置き、
+  アダプター越しに渡すことで DB マイグレーションに UI 文言を埋め込まない（D8）。
+- **複数端末同期 = ポーリング（R1 と整合）**。M2 のロビーと同じく、ブラウザから Supabase を直接購読せず
+  （R2: anon 直接アクセス拒否）、`pollRoomMessages` を 3 秒間隔で呼ぶ。取得は `ChatRepository`（アダプター層）に
+  隔離してあり、将来 Supabase Realtime へトリガーだけ差し替えられる。
 
 M2 で追加したもの:
 

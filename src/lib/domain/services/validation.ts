@@ -61,3 +61,17 @@ export function validateCapacity(value: number): ValidationError {
   }
   return null;
 }
+
+/** チャットのメッセージ本文（SC-007）。空送信不可・500 文字以内・空白のみ不可。 */
+export function validateMessageBody(value: string): ValidationError {
+  if (value.length === 0) {
+    return "メッセージを入力してください";
+  }
+  if (value.length > 500) {
+    return "メッセージは 500 文字以内で入力してください";
+  }
+  if (value.trim().length === 0) {
+    return "メッセージに空白以外の文字を入力してください";
+  }
+  return null;
+}

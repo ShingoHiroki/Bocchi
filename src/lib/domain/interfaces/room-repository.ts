@@ -72,4 +72,7 @@ export interface RoomRepository {
 
   /** 指定端末が参加しているルームの id 一覧（当該イベント内）。「自分の参加」を表示するため。 */
   listJoinedRoomIds(eventId: string, deviceId: string): Promise<string[]>;
+
+  /** 指定端末をルームから除去する（SC-007 退室・OV-02）。参加していなくても成功扱い（冪等）。 */
+  leave(roomId: string, deviceId: string): Promise<void>;
 }

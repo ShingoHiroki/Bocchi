@@ -209,6 +209,15 @@ export class SupabaseRoomRepository implements RoomRepository {
 
     return ((data as { room_id: string }[] | null) ?? []).map((r) => r.room_id);
   }
+
+  async leave(roomId: string, deviceId: string): Promise<void> {
+    const { error } = await this.client
+      .from("room_members")
+      .delete()
+      .eq("room_id", roomId)
+      .eq("device_id", deviceId);
+    if (error) throw error;
+  }
 }
 
 /** service_role クライアントを使う RoomRepository を生成する（サーバー側専用）。 */

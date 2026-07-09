@@ -17,3 +17,9 @@ export const LOBBY_TICK_INTERVAL_MS = 5_000;
 
 /** ロビー発の新規ルームの既定定員（D5: 既定 3 人）。 */
 export const DEFAULT_ROOM_CAPACITY = 3;
+
+/**
+ * ルームチャット（SC-007・M3）でメッセージ一覧をポーリング取得する間隔（仮値: 3 秒）。
+ * 複数端末間の同期に使う（R1: ブラウザから Supabase を直接購読せず、Server Action 経由で取得）。
+ */
+export const ROOM_MESSAGES_POLL_INTERVAL_MS = 3_000;

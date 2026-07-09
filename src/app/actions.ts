@@ -6,21 +6,44 @@
  * device_id・nickname 等は認証が無いためクライアントから引数で受け取る（D6）。
  */
 
+import { createChatRepository } from "@/lib/adapters/supabase/chat-repository";
 import { createEventRepository } from "@/lib/adapters/supabase/event-repository";
 import { createLobbyRepository } from "@/lib/adapters/supabase/lobby-repository";
 import { createRoomRepository } from "@/lib/adapters/supabase/room-repository";
+import type { ChatRepository } from "@/lib/domain/interfaces/chat-repository";
 import type { SimilarEvent } from "@/lib/domain/interfaces/event-repository";
+import {
+  SYSTEM_SENDER_NAME,
+  SYSTEM_WELCOME_BODY,
+  SYSTEM_WELCOME_KIND,
+} from "@/lib/domain/services/chat-content";
 import { decideMatch } from "@/lib/domain/services/matching";
 import { normalizeHashtag } from "@/lib/domain/services/normalize-hashtag";
 import {
   validateCapacity,
   validateHashtag,
+  validateMessageBody,
   validateRoomName,
 } from "@/lib/domain/services/validation";
 import { DEFAULT_ROOM_CAPACITY, MATCH_WAIT_THRESHOLD_MS } from "@/lib/matching-config";
 
 function isActive(expiresAt: string): boolean {
   return new Date(expiresAt).getTime() > Date.now();
+}
+
+// ── D4: 集合相談を促すシステム初期メッセージをルームに冪等投稿する ─────────────
+//
+// ルーム作成・参加・マッチ成立の複数経路から呼ばれるが、DB 側の
+// (room_id, system_kind) 部分ユニークインデックス + ON CONFLICT DO NOTHING により
+// 1 ルームにつき「welcome」は必ず 1 件だけ（並行呼び出しでも安全）。文言は
+// domain/services/chat-content.ts（Supabase 非依存）に集約している。
+async function ensureWelcomeMessage(chat: ChatRepository, roomId: string): Promise<void> {
+  await chat.ensureSystemMessage({
+    roomId,
+    kind: SYSTEM_WELCOME_KIND,
+    senderNickname: SYSTEM_SENDER_NAME,
+    body: SYSTEM_WELCOME_BODY,
+  });
 }
 
 // ── SC-002: ハッシュタグ入力からイベントを解決する ───────────────────────────
@@ -172,6 +195,9 @@ export async function createRoom(input: {
     },
   });
 
+  // D4: ルーム作成直後にシステム初期メッセージを自動投稿する。
+  await ensureWelcomeMessage(createChatRepository(), room.id);
+
   return { status: "ok", roomId: room.id };
 }
 
@@ -195,6 +221,11 @@ export async function joinRoom(input: {
     xAccount: input.xAccount.trim() === "" ? null : input.xAccount.trim(),
     deviceId: input.deviceId,
   });
+
+  // D4: 参加できた（既参加含む）ら、システム初期メッセージを冪等に投稿する。
+  if (result.status === "joined" || result.status === "already_member") {
+    await ensureWelcomeMessage(createChatRepository(), input.roomId);
+  }
 
   if (result.status === "joined") return { status: "joined", roomId: input.roomId };
   if (result.status === "already_member")
@@ -362,6 +393,8 @@ export async function lobbyTick(input: {
   if (entry.matchedRoomId) {
     const room = await rooms.getWithMemberCount(entry.matchedRoomId);
     if (room) {
+      // D4: マッチ成立（既存ルームへの割当・新ルーム作成の双方）でシステム初期メッセージを冪等投稿。
+      await ensureWelcomeMessage(createChatRepository(), room.id);
       return {
         status: "matched",
         roomId: room.id,
@@ -375,4 +408,148 @@ export async function lobbyTick(input: {
 
   const waitingCount = await lobby.countWaiting(event.id);
   return { status: "waiting", waitingCount, enteredAt: entry.enteredAt };
+}
+
+// ── SC-007: ルームチャット ────────────────────────────────────────────────────
+//
+// R1（リアルタイム更新）: ブラウザから Supabase を直接購読せず（R2 と矛盾するため）、
+// クライアントが一定間隔で pollRoomMessages を呼ぶポーリング方式で複数端末を同期する。
+// 取得は ChatRepository（アダプター層）越しに隔離し、将来 Realtime へ差し替え可能にする。
+
+export type ChatMessage = {
+  id: string;
+  senderType: "system" | "user";
+  senderNickname: string;
+  body: string;
+  createdAt: string;
+  /** この端末（自分）の発言か。右寄せ表示に使う。 */
+  mine: boolean;
+};
+
+export type RoomChatResult =
+  | { status: "not_found" }
+  | { status: "expired" }
+  | {
+      status: "ok";
+      room: { name: string; capacity: number; memberCount: number; expiresAt: string };
+      members: { nickname: string; xAccount: string | null }[];
+      messages: ChatMessage[];
+      /** この端末が当該ルームの参加者か（URL 直開き時の判定用）。 */
+      isMember: boolean;
+    };
+
+function toChatMessages(
+  messages: { senderType: "system" | "user"; senderNickname: string; body: string; createdAt: string; senderDeviceId: string | null; id: string }[],
+  deviceId: string,
+): ChatMessage[] {
+  return messages.map((m) => ({
+    id: m.id,
+    senderType: m.senderType,
+    senderNickname: m.senderNickname,
+    body: m.body,
+    createdAt: m.createdAt,
+    mine: m.senderType === "user" && m.senderDeviceId === deviceId,
+  }));
+}
+
+/** 初回ロード: システム初期メッセージを保証しつつ、ルーム・メンバー・メッセージを返す（SC-007）。 */
+export async function getRoomChat(roomId: string, deviceId: string): Promise<RoomChatResult> {
+  const rooms = createRoomRepository();
+  const room = await rooms.getWithMemberCount(roomId);
+  if (!room) return { status: "not_found" };
+  if (!isActive(room.expiresAt)) return { status: "expired" };
+
+  const chat = createChatRepository();
+  // D4: URL 直開き・新ルーム作成直後など、いずれの経路でも初期メッセージが必ず 1 件見えるよう保証する。
+  await ensureWelcomeMessage(chat, roomId);
+
+  const [members, messages] = await Promise.all([
+    rooms.listMembers(roomId),
+    chat.listMessages(roomId),
+  ]);
+
+  return {
+    status: "ok",
+    room: {
+      name: room.name,
+      capacity: room.capacity,
+      memberCount: room.memberCount,
+      expiresAt: room.expiresAt,
+    },
+    members: members.map((m) => ({ nickname: m.nickname, xAccount: m.xAccount })),
+    messages: toChatMessages(messages, deviceId),
+    isMember: members.some((m) => m.deviceId === deviceId),
+  };
+}
+
+/** ポーリング取得: メッセージ一覧と現在人数だけを軽量に返す（複数端末同期）。 */
+export type PollRoomResult =
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "ok"; memberCount: number; messages: ChatMessage[] };
+
+export async function pollRoomMessages(
+  roomId: string,
+  deviceId: string,
+): Promise<PollRoomResult> {
+  const rooms = createRoomRepository();
+  const room = await rooms.getWithMemberCount(roomId);
+  if (!room) return { status: "not_found" };
+  if (!isActive(room.expiresAt)) return { status: "expired" };
+
+  const chat = createChatRepository();
+  const messages = await chat.listMessages(roomId);
+  return {
+    status: "ok",
+    memberCount: room.memberCount,
+    messages: toChatMessages(messages, deviceId),
+  };
+}
+
+/** メッセージ投稿（バリデーション: 空送信不可・500 文字以内・空白のみ不可）。 */
+export type PostMessageResult =
+  | { status: "invalid"; message: string }
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "ok"; message: ChatMessage };
+
+export async function postRoomMessage(input: {
+  roomId: string;
+  nickname: string;
+  deviceId: string;
+  body: string;
+}): Promise<PostMessageResult> {
+  const bodyError = validateMessageBody(input.body);
+  if (bodyError) return { status: "invalid", message: bodyError };
+
+  const rooms = createRoomRepository();
+  const room = await rooms.getWithMemberCount(input.roomId);
+  if (!room) return { status: "not_found" };
+  if (!isActive(room.expiresAt)) return { status: "expired" };
+
+  const chat = createChatRepository();
+  const posted = await chat.postMessage({
+    roomId: input.roomId,
+    senderNickname: input.nickname,
+    senderDeviceId: input.deviceId,
+    body: input.body.trim(),
+  });
+
+  return {
+    status: "ok",
+    message: {
+      id: posted.id,
+      senderType: posted.senderType,
+      senderNickname: posted.senderNickname,
+      body: posted.body,
+      createdAt: posted.createdAt,
+      mine: true,
+    },
+  };
+}
+
+/** 退室（OV-02 の OK）。room_members から自分を除去する（冪等）。 */
+export async function leaveRoom(input: { roomId: string; deviceId: string }): Promise<void> {
+  const rooms = createRoomRepository();
+  await rooms.leave(input.roomId, input.deviceId);
 }

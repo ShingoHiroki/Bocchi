@@ -10,12 +10,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 現在の状態
 
-M3（ルームチャット）まで完了。M2 までに加えて、マッチ成立・ルーム作成・ルーム参加のいずれの経路でも、
-集合場所の相談を促すシステム初期メッセージ（D4）がルームに自動投稿される（1 ルーム 1 件・重複なし）。
-SC-007 ルームチャット画面を本実装し、システム／参加者メッセージの区別・自分の発言の右寄せ・クイック返信チップ
-（1 タップ送信）・自由入力送信・メンバー表示（ニックネーム＋任意 X リンク）・退室（OV-02 確認 → room_members
-から除去 → ルーム一覧）を備える。複数端末間の同期は Server Action のポーリング（3 秒間隔）で行う。
-話題カードは M4 のため「準備中」ボタンのみ。M4 以降（話題カード本実装・TTL 物理削除・磨き込み）は未着手。
+M4（話題カード・TTL・磨き込み）まで完了。これで M0〜M4 の完了条件を満たし、実地投入（M5）の準備段階に入る。
+ルーム画面から話題カード（OV-04）を引いてチャットへ共有でき、作成から 24 時間経過したイベント/ルームは
+一覧に出なくなるうえ物理削除もされる。マッチ成立は視覚・音・バイブに加え、非アクティブタブでのタイトル点滅で
+気づける。M5（実地検証準備・9 節チェックリスト）は未着手。
+
+M4 で追加したもの:
+
+- マイグレーション 2 本
+  - `supabase/migrations/20260709000001_m4_topic_cards.sql`
+    - `topic_cards`（`id` / `category`(tech|general) / `prompt_text`(<=100)）。RLS 有効・ポリシー無し・service_role にのみ GRANT。
+    - シードデータ 26 件（技術イベントの懇親会向け 19 件＋一般的な話題 7 件＝約 27%）。お題はユーザー向け表示マスタのため
+      例外的に DB シードで持つ（標準 Postgres の行データとして持ち出せる）。
+    - DB 関数 `get_random_topic_card(p_exclude_id)`: `order by random()` で 1 件返す。直前のお題を除外して引ける
+      （「別のお題を引く」の連続回避）。
+  - `supabase/migrations/20260709000002_m4_ttl_purge.sql`
+    - DB 関数 `purge_expired()`: 期限切れ（`expires_at <= now()`）の rooms → events を DELETE し、直接削除件数を返す。
+      配下の room_members / messages / lobby_entries は FK の ON DELETE CASCADE で連鎖削除。削除条件は expires_at のみで、
+      他イベント・他ルームを巻き込まない。既存の「WHERE による論理非表示」は維持したうえでの物理削除の追加。
+- ドメイン層: インターフェース `TopicCardRepository`（`getRandom(excludeId?)`）、`MaintenanceRepository`（`purgeExpired()`）。
+  `src/lib/domain/services/chat-content.ts` に話題カード共有用の文言（`TOPIC_CARD_SENDER_NAME` / `formatTopicCardMessage`）を追加。
+- アダプター層: `SupabaseTopicCardRepository`（`get_random_topic_card` RPC）、`SupabaseMaintenanceRepository`（`purge_expired` RPC）。
+  `ChatRepository.postSystemMessage`（`system_kind=null` のシステム投稿。話題カード共有用。welcome と違い何件でも入る）を追加。
+- Server Actions（`src/app/actions.ts`）: `drawTopicCard(excludeId?)` / `sendTopicCard`（お題をチャットへシステム風に投稿）を追加。
+  未使用だった旧 `getRoomDetail` / `RoomDetailResult`（M1 のプレースホルダ用）を削除。
+- 画面: SC-007 の「準備中」ボタンを OV-04 話題カード（`src/components/topic-card-sheet.tsx`。ボトムシートでお題表示・
+  「別のお題を引く」「みんなに送る」）に置き換え。OV-01（`src/components/match-overlay.tsx`）にタイトル点滅を追加。
+  退室ボタン等のタップ領域を微調整。
+
+### M4 の設計判断（TTL 物理削除の方式・R6）
+
+- **採用方式 = アクセス時のオポチュニスティック削除（間引きあり）**。pg_cron / Vercel Cron を使わず、
+  ロビー tick（`lobbyTick`）とルーム一覧取得（`getRoomList`）から `purge_expired()` を呼ぶ。
+  `supabase start` + `npm run dev` だけで動くローカル完結を最優先し、M2 の R4（マッチング実行トリガーもクライアント主導）と
+  設計判断を揃える。毎回叩くと無駄なので、プロセス内で最短 60 秒に間引く（`PURGE_MIN_INTERVAL_MS`）。
+  論理非表示（各クエリの `expires_at > now()` の WHERE）を維持しているため、削除が多少遅れても期限切れデータは
+  ユーザーに見えず、掃除は best-effort でよい。判定・実行を DB 関数に閉じ込め、将来 pg_cron 等へトリガーだけ差し替え可能。
+- **話題カードの共有 = システム風メッセージ（`system_kind=null`）**。welcome（1 ルーム 1 件・`system_kind='welcome'`）と違い、
+  お題は何度でも送れる必要があるため、`system_kind` を持たせず重複防止インデックスの対象外にする。中央寄せのシステム表示になる。
 
 M3 で追加したもの:
 

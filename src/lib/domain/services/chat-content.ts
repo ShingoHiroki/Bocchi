@@ -29,3 +29,14 @@ export const QUICK_REPLIES: readonly string[] = [
   "テーブル番号は？",
   "すぐ行きます",
 ];
+
+/** 話題カードを「みんなに送る」で共有したときのチャット上の送信者表示名（OV-04）。 */
+export const TOPIC_CARD_SENDER_NAME = "話題カード";
+
+/**
+ * 話題カードをチャットへ共有するときの本文フォーマット（OV-04）。
+ * システム初期メッセージ（welcome）と見分けられるよう先頭にカードの目印を付ける。
+ */
+export function formatTopicCardMessage(promptText: string): string {
+  return `🃏 話題カード：${promptText}`;
+}

@@ -61,6 +61,28 @@ export class SupabaseChatRepository implements ChatRepository {
     return toMessageRecord(data);
   }
 
+  async postSystemMessage(input: {
+    roomId: string;
+    senderNickname: string;
+    body: string;
+  }): Promise<MessageRecord> {
+    // 話題カードの共有（OV-04）。sender_type='system' かつ system_kind=null で投稿する。
+    // system_kind が null なので重複防止の部分ユニークインデックスの対象外になり、何件でも入る。
+    // sender_device_id は system 制約により NULL（messages_system_shape）。
+    const { data, error } = await this.client
+      .from("messages")
+      .insert({
+        room_id: input.roomId,
+        sender_type: "system",
+        sender_nickname: input.senderNickname,
+        body: input.body,
+      })
+      .select("*")
+      .single<MessageRow>();
+    if (error) throw error;
+    return toMessageRecord(data);
+  }
+
   async ensureSystemMessage(input: {
     roomId: string;
     kind: string;

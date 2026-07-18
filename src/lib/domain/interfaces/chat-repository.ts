@@ -36,6 +36,17 @@ export interface ChatRepository {
   postMessage(input: PostMessageInput): Promise<MessageRecord>;
 
   /**
+   * システム風のメッセージを投稿し、作成された 1 件を返す（話題カードの「みんなに送る」= OV-04）。
+   * ensureSystemMessage（1 ルーム 1 件の welcome）と異なり、こちらは何件でも投稿できる
+   * （system_kind を持たないため重複防止インデックスの対象外）。中央寄せのシステム表示になる。
+   */
+  postSystemMessage(input: {
+    roomId: string;
+    senderNickname: string;
+    body: string;
+  }): Promise<MessageRecord>;
+
+  /**
    * システムメッセージを冪等に投稿する（D4）。同一ルーム・同一種別（kind）は 1 件だけ入る。
    * ルーム作成・参加・マッチ成立の複数経路から何度呼ばれても重複しない。
    */

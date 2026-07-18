@@ -9,11 +9,13 @@ import {
   leaveRoom,
   pollRoomMessages,
   postRoomMessage,
+  sendTopicCard,
   type ChatMessage,
   type RoomChatResult,
 } from "@/app/actions";
 import { ExpiredNotice } from "@/components/expired-notice";
 import { RemainingCountdown } from "@/components/remaining-countdown";
+import { TopicCardSheet } from "@/components/topic-card-sheet";
 import { Button, ErrorText, Hint, Screen } from "@/components/ui";
 import { QUICK_REPLIES } from "@/lib/domain/services/chat-content";
 import { validateMessageBody } from "@/lib/domain/services/validation";
@@ -48,6 +50,7 @@ export default function RoomDetailPage() {
   const [joining, setJoining] = useState(false);
   const [connLost, setConnLost] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [topicOpen, setTopicOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -200,6 +203,22 @@ export default function RoomDetailPage() {
     [profile, sending, send],
   );
 
+  // OV-04: 話題カードの「みんなに送る」。共有メッセージを投稿し、確定分へ即時反映する。
+  const handleSendTopic = useCallback(
+    async (promptText: string) => {
+      if (!profile) return;
+      const res = await sendTopicCard({ roomId, promptText });
+      if (res.status === "ok") {
+        setMessages((prev) =>
+          prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message],
+        );
+      } else {
+        setFatal(res.status);
+      }
+    },
+    [profile, roomId],
+  );
+
   const handleResend = useCallback(
     (localId: string) => {
       if (!profile) return;
@@ -284,7 +303,7 @@ export default function RoomDetailPage() {
         <button
           type="button"
           onClick={() => setConfirmLeave(true)}
-          className="shrink-0 text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+          className="-mr-2 shrink-0 rounded-md px-2 py-1.5 text-sm text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950"
         >
           退室
         </button>
@@ -360,7 +379,7 @@ export default function RoomDetailPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* 直近アクション帯: クイック返信＋話題カード（M4 は準備中） */}
+      {/* 直近アクション帯: クイック返信＋話題カード（OV-04） */}
       {canPost && (
         <div className="mt-2 flex flex-wrap gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
           {QUICK_REPLIES.map((q) => (
@@ -376,10 +395,10 @@ export default function RoomDetailPage() {
           ))}
           <button
             type="button"
-            disabled
-            className="rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-sm text-zinc-400 dark:border-zinc-700"
+            onClick={() => setTopicOpen(true)}
+            className="rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 dark:hover:bg-indigo-900"
           >
-            話題カードを引く（準備中）
+            🃏 話題カードを引く
           </button>
         </div>
       )}
@@ -430,6 +449,13 @@ export default function RoomDetailPage() {
           </Button>
         </div>
       )}
+
+      {/* OV-04 話題カード */}
+      <TopicCardSheet
+        open={topicOpen}
+        onClose={() => setTopicOpen(false)}
+        onSend={handleSendTopic}
+      />
 
       {/* OV-02 退室確認 */}
       {confirmLeave && (

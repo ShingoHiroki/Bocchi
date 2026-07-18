@@ -67,6 +67,44 @@ export function MatchOverlay({ roomName, memberCount, capacity, onJoin }: MatchO
     vibrate();
   }, []);
 
+  // タブが非アクティブ（別タブ・最小化）でもマッチ成立に気づけるよう、タイトルを点滅させる。
+  // Web Push は使わない制約（D7）の中での軽い補強。表示中のタブでは点滅させない。
+  useEffect(() => {
+    const originalTitle = document.title;
+    const flashTitle = "🎉 マッチ成立！";
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let showFlash = false;
+
+    const startFlashing = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        document.title = showFlash ? flashTitle : originalTitle;
+        showFlash = !showFlash;
+      }, 800);
+    };
+    const stopFlashing = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      document.title = originalTitle;
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) startFlashing();
+      else stopFlashing();
+    };
+
+    // 成立時点で既にバックグラウンドなら即点滅を始める。
+    if (document.hidden) startFlashing();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopFlashing();
+    };
+  }, []);
+
   return (
     <div
       role="dialog"

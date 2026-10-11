@@ -1,0 +1,62 @@
+name: "機能追加・改善"
+description: "新機能、既存機能の改善、ドキュメント整備を依頼する"
+body:
+  - type: markdown
+    attributes:
+      value: "目的と完了条件を具体的に記入してください。共通の開発方針はリポジトリの AGENTS.md を参照してください。"
+  - type: textarea
+    id: background
+    attributes:
+      label: "背景・困っていること"
+      description: "誰が、どの場面で困っているか記入してください。"
+      placeholder: "ルーム一覧で空きがあるルームを探すのに時間がかかる。"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "実現したい動作"
+      description: "利用者の操作と、その結果を具体的に記入してください。"
+      placeholder: "ルーム一覧で「空きあり」を選ぶと、参加可能なルームだけが表示される。"
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: "現在の動作"
+      description: "現状が分かれば記入してください。"
+      placeholder: "満員のルームも同じ一覧に表示される。"
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "完了条件"
+      description: "実装後に確認できる条件をチェックリストで記入してください。"
+      placeholder: "- [ ] 「空きあり」を選ぶと満員のルームが表示されない。\n- [ ] 絞り込みを解除すると全ルームが表示される。"
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: "対象画面・関連資料"
+      description: "画面ID、関連Issue、設計資料などがあれば記入してください。"
+      placeholder: "SC-007、docs/screen-flow-design.md、関連Issue #123"
+    validations:
+      required: false
+  - type: textarea
+    id: constraints
+    attributes:
+      label: "対象外・守ってほしい制約"
+      description: "今回変更しない範囲や、追加の制約があれば記入してください。"
+      placeholder: "今回の対象は表示のみ。DBスキーマは変更しない。"
+    validations:
+      required: false
+  - type: textarea
+    id: implementation
+    attributes:
+      label: "実装案・補足"
+      description: "実装方法が分からなければ空欄で構いません。ログには秘密鍵・トークン・個人情報を含めないでください。"
+      placeholder: "実装案、スクリーンショット、機密情報を除いたログなど"
+    validations:
+      required: false

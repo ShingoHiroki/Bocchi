@@ -2,7 +2,7 @@
 
 - 作成日: 2026-07-08
 - 対象: 懇親会ぼっち回避アプリ「Bocchi」MVP（v1）
-- 前提文書: `docs/product-discovery.md`（企画）、`docs/interview-decisions.md`（決定事項 D1〜D8）、`CLAUDE.md`（技術方針）
+- 前提文書: `docs/product-discovery.md`（企画）、`docs/interview-decisions.md`（決定事項 D1〜D8）、`AGENTS.md`（技術方針）
 - 対象デバイス: スマートフォンのブラウザ（モバイル Web、縦画面前提）。PC ブラウザでも破綻しないが最適化対象外
 - 認証: なし。ニックネームのみ端末ローカル保存（D6）
 - 本書の位置づけ: 実装着手前の確定仕様の文書化。画面一覧・遷移図・画面仕様書・主要フロー・エッジケース・簡易ワイヤーフレームを含む

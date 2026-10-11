@@ -1,5 +1,5 @@
 # Next.js アプリのコンテナイメージ（動作確認・配布用）。
-# 普段の開発はホストの `npm run dev` を使う（CLAUDE.md 参照）。
+# 普段の開発はホストの `npm run dev` を使う（AGENTS.md 参照）。
 # ローカル Supabase は Supabase CLI（`supabase start`）が別途 Docker で管理するため、
 # このイメージには含まれない。
 

@@ -1,0 +1,78 @@
+name: "不具合報告"
+description: "期待と異なる動作を報告し、修正を依頼する"
+body:
+  - type: markdown
+    attributes:
+      value: "目的と完了条件を具体的に記入してください。共通の開発方針はリポジトリの AGENTS.md を参照してください。"
+  - type: textarea
+    id: background
+    attributes:
+      label: "背景・困っていること"
+      description: "影響や発生頻度が分かれば記入してください。"
+      placeholder: "チャット送信のたびに発生し、会話を続けられない。"
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: "期待する動作"
+      description: "同じ操作で本来どうなるべきか記入してください。"
+      placeholder: "送信したメッセージが一覧に1件表示される。"
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: "現在の動作"
+      description: "実際の結果やエラーメッセージを記入してください。"
+      placeholder: "送信ボタンを1回押すと同じメッセージが2件表示される。"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "再現手順"
+      description: "再現に必要な操作・前提条件を順番に記入してください。再現できない場合は発生時の状況を記入してください。"
+      placeholder: "1. イベントに入り、ルームを作成する。\n2. チャットに「こんにちは」と入力する。\n3. 送信ボタンを1回押す。"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "利用環境"
+      description: "端末、OS、ブラウザ、ローカル／本番などを記入してください。不明な項目は「不明」で構いません。"
+      placeholder: "iPhone / iOS 18 / Safari / 本番 / Wi-Fi"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "完了条件"
+      description: "修正後に確認できる条件をチェックリストで記入してください。"
+      placeholder: "- [ ] 再現手順を実行してもメッセージが重複しない。\n- [ ] 別端末でも同じメッセージが1件だけ表示される。"
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: "対象画面・関連資料"
+      description: "画面ID、関連Issue、設計資料などがあれば記入してください。"
+      placeholder: "SC-007、docs/screen-flow-design.md、関連Issue #123"
+    validations:
+      required: false
+  - type: textarea
+    id: constraints
+    attributes:
+      label: "対象外・守ってほしい制約"
+      description: "今回変更しない範囲や、追加の制約があれば記入してください。"
+      placeholder: "今回の対象は表示のみ。DBスキーマは変更しない。"
+    validations:
+      required: false
+  - type: textarea
+    id: implementation
+    attributes:
+      label: "実装案・補足"
+      description: "実装方法が分からなければ空欄で構いません。ログには秘密鍵・トークン・個人情報を含めないでください。"
+      placeholder: "実装案、スクリーンショット、機密情報を除いたログなど"
+    validations:
+      required: false
